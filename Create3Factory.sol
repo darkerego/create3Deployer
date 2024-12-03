@@ -11,8 +11,6 @@ pragma solidity ^0.8.26;
 contract Create3Deployer {
     address admin;
     bytes32 constant childCode = 0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f;
-    bytes destructToOriginCode = hex"32ff"; // The bytecode for ORIGIN + SELFDESTRUCT
-    
     
     error ErrorCreatingProxy();
     error ErrorCreatingContract();
@@ -92,10 +90,6 @@ contract Create3Deployer {
             
             }
         }
-    
-
-  
-  
 
   /**
     @notice Returns the size of the code on a given address
@@ -108,24 +102,21 @@ contract Create3Deployer {
 
 
   /*
-  @notice This is intended to recover Ether previously sent to an address that is recoverable by this contract \ 
-  @notice make sure you do not ever forget the salt that generates the address if you use this feature, otherwise \
-  @notice your funds will be lost forever!
+  @dev This is intended to recover Ether previously sent to an address that is recoverable by this contract \ 
+  make sure you do not ever forget the salt that generates the address if you use this feature, otherwise \
+  your funds will be lost forever!
   @notice Creates a contract that immediately selfdestruct's and forwards any Ether stored there to the `tx.origin`, \
-  @notice because create3 uses a proxy for deterministic deployment, we need to forward back to origin instead of sender.
-  @dev 0x32ff selfdestructs to `tx.origin`, while `0x33ff` selfdestructs to msg.sender
+  because create3 uses a proxy for deterministic deployment, we need to forward back to origin instead of sender.
+  @param _salt Salt of the contract creation, resulting address will be derivated from this
   */
   function recoverHiddenEther(bytes32 _salt) external protected returns (address) {
     address addr = computeAddress(_salt);
-    if (codeSize(addr) != 0) revert TargetAlreadyExists(); // if addr is not empty then it means this contract already exists
-    if (addr.balance == 0) {
-      revert NoEtherToRecover(addr);
-    }
-    return create3(_salt, destructToOriginCode, 0);
+    if (codeSize(addr) != 0) revert TargetAlreadyExists(); //@dev if addr is not empty then it means this contract already exists
+    if (addr.balance == 0) revert NoEtherToRecover(addr); //@dev no point if there's no Ether stored here
+    return create3(_salt, hex"32ff", 0); //@dev 0x32ff - The bytecode for ORIGIN + SELFDESTRUCT
     
 
   }
-
 
 
   /**
