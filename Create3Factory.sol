@@ -7,28 +7,44 @@ pragma solidity ^0.8.26;
   @notice adapted from library originally written by Agustin Aguilar <aa@horizon.io>
 */
 
-
 contract Create3Deployer {
     address admin;
-    bytes32 constant childCode = 0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f;
+    /*
+     @notice The bytecode for a contract that proxies the creation of another contract
+     @dev If this code is deployed using CREATE2 it can be used to decouple `creationCode` from the child contract address \ 
+      https://github.com/0xsequence/create3/blob/acc4703a21ec1d71dc2a99db088c4b1f467530fd/contracts/Create3.sol#L14C4-L15C122
+    */
+    bytes internal creationCode = hex"67_36_3d_3d_37_36_3d_34_f0_3d_52_60_08_60_18_f3";
+    bytes32 internal constant creationCodeHash = 0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f;
+
     
+    /*
+    @dev custom error functions are cheaper than `require` statements
+    */
     error ErrorCreatingProxy();
     error ErrorCreatingContract();
     error TargetAlreadyExists();
     error AuthenticationError();
     error TransactionFailed();
     error NoEtherToRecover(address target);
-    
+    // emit an event whenever a contract is deployed
     event ContractDeployed(address indexed contractAddress, bytes32 indexed salt);
-    // solc-ignore-next-line missing-receive
+    // @dev accept deposits to this contract
     receive() external payable {}
     fallback() external payable {}
     
+    /*
+    @dev store the `msg.sender` as the contract's admin
+    */
     constructor() {
         assembly {
             sstore(admin.slot, caller())
         }
     }
+
+    /*
+    @notice called by modifier `protected`
+    */
     
     function auth() internal view {
       assembly {
@@ -41,20 +57,32 @@ contract Create3Deployer {
         }
     }
 
+    /*
+    @dev this modifier restricts function calls to the admin
+    */
+
     modifier protected {
         auth();
         _;
     }
+    
 
+    /*
+    @notice transfer ownership of the factory to a new account
+    @param _admin the new admin account's address
+    */
     function updateAdmin(address _admin) external protected {
         assembly {
             sstore(admin.slot, _admin)
         }
     }
 
-     function generateRandomSalt() external view returns (bytes32) {
-        bytes32 salt;
+    /*
+    @notice a helper function that generates a random salt for convience 
+    */
 
+     function generateRandomSalt() external view returns (bytes32 salt) {
+        
         assembly {
             let ptr := mload(0x40)    // Get free memory pointer
 
@@ -67,8 +95,7 @@ contract Create3Deployer {
             // Compute keccak256 hash over the 96 bytes (32 * 3) of data and store it in salt
             salt := keccak256(ptr, 0x60)
         }
-
-        return salt;
+       
     }
      
 
@@ -118,7 +145,6 @@ contract Create3Deployer {
 
   }
 
-
   /**
     @notice Creates a new contract with given `_creationCode` and `_salt`, forward msg.value (if any) to the deployed contract
     @param _salt Salt of the contract creation, resulting address will be derivated from this value only
@@ -137,7 +163,7 @@ contract Create3Deployer {
     @return addr of the deployed contract, reverts on error
   */
   function create3(bytes32 _salt, bytes memory _creationCode, uint256 _value) internal returns (address addr) {
-    bytes memory creationCode = hex"67_36_3d_3d_37_36_3d_34_f0_3d_52_60_08_60_18_f3";
+    
 
     // Get target final address
     addr = computeAddress(_salt);
@@ -145,7 +171,7 @@ contract Create3Deployer {
 
     // Create CREATE2 proxy
     address proxy; 
-    assembly { proxy := create2(0, add(creationCode, 32), mload(creationCode), _salt)}
+    assembly { proxy := create2(0, add(creationCode.slot, 32), mload(creationCode.slot), _salt)}
     if (proxy == address(0)) revert ErrorCreatingProxy();
 
     // Call proxy with final init code
@@ -180,7 +206,7 @@ contract Create3Deployer {
               hex'ff',
               address(this),
               _salt,
-              bytes32(0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f)
+              creationCodeHash
             )
           )
         )
