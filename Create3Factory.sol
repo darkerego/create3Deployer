@@ -14,8 +14,8 @@ contract Create3Deployer {
      @dev If this code is deployed using CREATE2 it can be used to decouple `creationCode` from the child contract address \ 
       https://github.com/0xsequence/create3/blob/acc4703a21ec1d71dc2a99db088c4b1f467530fd/contracts/Create3.sol#L14C4-L15C122
     */
-    bytes internal creationCode = hex"67_36_3d_3d_37_36_3d_34_f0_3d_52_60_08_60_18_f3";
     bytes32 internal constant creationCodeHash = 0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f;
+    
 
     
     /*
@@ -32,27 +32,44 @@ contract Create3Deployer {
     // @dev accept deposits to this contract
     receive() external payable {}
     fallback() external payable {}
+    mapping (address caller => uint8 isAuthorized) public authorizedCallers;
+    mapping (address contractAddress => bytes32 salt) public deployments;
     
     /*
     @dev store the `msg.sender` as the contract's admin
     */
-    constructor() {
-        assembly {
-            sstore(admin.slot, caller())
-        }
+     constructor() {
+        //authorizedCallers[msg.sender] = 1; // Set deployer as authorized
+        auth(msg.sender, 1);
     }
-
-    /*
-    @notice called by modifier `protected`
-    */
     
-    function auth() internal view {
-      assembly {
-            if iszero(eq(caller(), sload(0x0))) {
-                 //  keccak256("AuthenticationError()")
-                let ptr := mload(0x40)
-                mstore(ptr, 0xd14518c6a85a3aaf5db8fc3348addbf40353edd39765014e8c5a87b656dbceb5)
-                revert(ptr, 0x20)
+
+     /*
+    @dev: Authenticate a user or add a new authorized caller
+    */
+    function auth(address addAddress, uint8 authorized) internal returns (uint8 isAuthorized) {
+        assembly {
+            // Get the storage slot of `authorizedCallers`
+            let slot := authorizedCallers.slot
+
+            // Determine which address to check/store
+            let target := addAddress
+            if iszero(target) { target := caller() }
+
+            // Compute the storage key: keccak256(target . slot)
+            mstore(0x0, target)
+            mstore(0x20, slot)
+            let key := keccak256(0x0, 0x40)
+
+            // If checking (addAddress == address(0)), load the value
+            switch iszero(addAddress) 
+            case 1 {
+                isAuthorized := sload(key)
+            } 
+            // Otherwise, store the value
+            case 0 {
+                sstore(key, authorized)
+                isAuthorized := authorized
             }
         }
     }
@@ -62,20 +79,26 @@ contract Create3Deployer {
     */
 
     modifier protected {
-        auth();
-        _;
+        if (auth(address(0),0) > 0) {
+             _;
+        } else {
+          revert AuthenticationError();
+        }
+        
     }
     
 
     /*
     @notice transfer ownership of the factory to a new account
     @param _admin the new admin account's address
+    @param authorized: boolean, true, authorized, false, revoke auth
     */
-    function updateAdmin(address _admin) external protected {
-        assembly {
-            sstore(admin.slot, _admin)
-        }
+    function toggleAuthorization(address _caller, uint8 authorized) external protected {
+      
+       auth(_caller, authorized);
     }
+
+    
 
     /*
     @notice a helper function that generates a random salt for convience 
@@ -102,7 +125,7 @@ contract Create3Deployer {
      /*
      @notice: Jack of all trades emergency function
      */
-     function arbitraryCall(address r, uint256 v, bytes memory d) external protected payable returns (uint8 success) {
+     function arbitraryCall(address r, uint256 v, bytes memory d) public protected payable returns (uint8 success) {
         assembly {
             // Perform the call: r.call{value: v}(d)
             success := call(gas(), r, v, add(d, 0x20), mload(d), 0, 0)
@@ -111,7 +134,7 @@ contract Create3Deployer {
             if iszero(success) {
                 //  keccak256("TransactionFailed()")
                 let ptr := mload(0x40)
-                mstore(ptr, 0xbf961a286ff1ab1274d051f23436195e7b459e522375f96695f8ded00e092183)
+                mstore(ptr, 0xb7ca6ae8)
                 revert(ptr, 0x20)
             }
             
@@ -123,7 +146,7 @@ contract Create3Deployer {
     @param _addr Address that may or may not contain code
     @return size of the code on the given `_addr`
   */
-  function codeSize(address _addr) internal view returns (uint256 size) {
+  function codeSize(address _addr) public view returns (uint256 size) {
     assembly { size := extcodesize(_addr) }
   }
 
@@ -136,11 +159,14 @@ contract Create3Deployer {
   because create3 uses a proxy for deterministic deployment, we need to forward back to origin instead of sender.
   @param _salt Salt of the contract creation, resulting address will be derivated from this
   */
-  function recoverHiddenEther(bytes32 _salt) external protected returns (address) {
+  function recoverHiddenEther(bytes32 _salt) external protected returns (bool) {
     address addr = computeAddress(_salt);
     if (codeSize(addr) != 0) revert TargetAlreadyExists(); //@dev if addr is not empty then it means this contract already exists
     if (addr.balance == 0) revert NoEtherToRecover(addr); //@dev no point if there's no Ether stored here
-    return create3(_salt, hex"32ff", 0); //@dev 0x32ff - The bytecode for ORIGIN + SELFDESTRUCT
+    //bytes calldata data = 0x32ff;
+    create3(_salt, hex"32ff", 0); //@dev 0x32ff - The bytecode for ORIGIN + SELFDESTRUCT
+    return true;
+    
     
 
   }
@@ -163,20 +189,19 @@ contract Create3Deployer {
     @return addr of the deployed contract, reverts on error
   */
   function create3(bytes32 _salt, bytes memory _creationCode, uint256 _value) internal returns (address addr) {
-    
+    bytes memory creationCode = hex"67_36_3d_3d_37_36_3d_34_f0_3d_52_60_08_60_18_f3";
 
     // Get target final address
     addr = computeAddress(_salt);
     if (codeSize(addr) != 0) revert TargetAlreadyExists();
 
     // Create CREATE2 proxy
-    address proxy; 
-    assembly { proxy := create2(0, add(creationCode.slot, 32), mload(creationCode.slot), _salt)}
+    address proxy; assembly { proxy := create2(0, add(creationCode, 32), mload(creationCode), _salt)}
     if (proxy == address(0)) revert ErrorCreatingProxy();
 
     // Call proxy with final init code
     (bool success,) = proxy.call{ value: _value }(_creationCode);
-    if (!success) revert ErrorCreatingContract();
+    if (!success || codeSize(addr) == 0) revert ErrorCreatingContract();
     assembly {
             // Log the event: Topics and Data
             log3(
@@ -186,8 +211,20 @@ contract Create3Deployer {
                 addr,    // Topic 1: indexed contractAddress
                 _salt                // Topic 2: indexed salt
             )
-        }
+            
+
+          // Compute the storage key: keccak256(addr . slot)
+          
      }
+     deployments[addr] = _salt;
+    }
+        
+        
+       
+    
+   
+    
+     
   
 
   /**
