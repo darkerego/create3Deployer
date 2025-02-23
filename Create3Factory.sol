@@ -8,7 +8,7 @@ pragma solidity ^0.8.26;
 */
 
 contract Create3Deployer {
-    address admin;
+   
     /*
      @notice The bytecode for a contract that proxies the creation of another contract
      @dev If this code is deployed using CREATE2 it can be used to decouple `creationCode` from the child contract address \ 
