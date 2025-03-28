@@ -1,13 +1,75 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.26;
 
+
+/**
+  @title Authentication Manager
+  @author Darkerego <xelectron@protonmail.com>
+*/
+
+abstract contract Auth {
+    error AccessDenied();
+
+    event AccessGranted(address indexed account);
+    event AccessRevoked(address indexed account);
+
+    mapping(address => uint8) private authorizedCallers;
+
+    bytes32 private constant ACCESS_GRANTED_SIG = keccak256("AccessGranted(address)");
+    bytes32 private constant ACCESS_REVOKED_SIG = keccak256("AccessRevoked(address)");
+
+    modifier protected() {
+        authenticate();
+        _;
+    }
+
+    constructor() {
+        authorizedCallers[msg.sender] = 1;
+    }
+
+    function authGetter(address account) private pure returns (uint256 key) {
+        assembly {
+            // Compute the correct mapping key: keccak256(account . storage_slot)
+            mstore(0x0, account)
+            mstore(0x20, authorizedCallers.slot)
+            key := keccak256(0x0, 0x40)
+        }
+    }
+
+    function authSetter(address account, bool status) public protected {
+        uint key = authGetter(account);
+        bytes32 topic = status ? ACCESS_GRANTED_SIG : ACCESS_REVOKED_SIG;
+
+        assembly {
+            let newStatus := iszero(iszero(status)) // Convert bool to 1 or 0
+            sstore(key, newStatus)
+
+            // Store the indexed parameter (account) at memory position 0x0
+            mstore(0x0, account)
+            log1(0x0, 0x20, topic) // Emit event with 1 indexed parameter
+        }
+    }
+
+    function authenticate() internal view returns (uint8 isAuthorized) {
+        uint key = authGetter(msg.sender);
+        assembly {
+            isAuthorized := sload(key)
+            if iszero(isAuthorized) {
+                let ptr := mload(0x40)
+                mstore(ptr, 0x4ca88867)
+                revert(ptr, 0x4)
+            }
+        }
+    }
+}
+
 /**
   @title A contract for deploying contracts EIP-3171 style.
   @author Darkerego <xelectron@protonmail.com>
   @notice adapted from library originally written by Agustin Aguilar <aa@horizon.io>
 */
 
-contract Create3Deployer {
+contract Create3Deployer is Auth {
    
     /*
      @notice The bytecode for a contract that proxies the creation of another contract
@@ -24,7 +86,6 @@ contract Create3Deployer {
     error ErrorCreatingProxy();
     error ErrorCreatingContract();
     error TargetAlreadyExists();
-    error AuthenticationError();
     error TransactionFailed();
     error NoEtherToRecover(address target);
     // emit an event whenever a contract is deployed
@@ -40,66 +101,9 @@ contract Create3Deployer {
     */
      constructor() {
         //authorizedCallers[msg.sender] = 1; // Set deployer as authorized
-        auth(msg.sender, 1);
+        authSetter(msg.sender, true);
     }
     
-
-     /*
-    @dev: Authenticate a user or add a new authorized caller
-    */
-    function auth(address addAddress, uint8 authorized) internal returns (uint8 isAuthorized) {
-        assembly {
-            // Get the storage slot of `authorizedCallers`
-            let slot := authorizedCallers.slot
-
-            // Determine which address to check/store
-            let target := addAddress
-            if iszero(target) { target := caller() }
-
-            // Compute the storage key: keccak256(target . slot)
-            mstore(0x0, target)
-            mstore(0x20, slot)
-            let key := keccak256(0x0, 0x40)
-
-            // If checking (addAddress == address(0)), load the value
-            switch iszero(addAddress) 
-            case 1 {
-                isAuthorized := sload(key)
-            } 
-            // Otherwise, store the value
-            case 0 {
-                sstore(key, authorized)
-                isAuthorized := authorized
-            }
-        }
-    }
-
-    /*
-    @dev this modifier restricts function calls to the admin
-    */
-
-    modifier protected {
-        if (auth(address(0),0) > 0) {
-             _;
-        } else {
-          revert AuthenticationError();
-        }
-        
-    }
-    
-
-    /*
-    @notice transfer ownership of the factory to a new account
-    @param _admin the new admin account's address
-    @param authorized: boolean, true, authorized, false, revoke auth
-    */
-    function toggleAuthorization(address _caller, uint8 authorized) external protected {
-      
-       auth(_caller, authorized);
-    }
-
-    
-
     /*
     @notice a helper function that generates a random salt for convience 
     */
@@ -184,7 +188,8 @@ contract Create3Deployer {
   /**
     @notice Creates a new contract with given `_creationCode` and `_salt`
     @param _salt Salt of the contract creation, resulting address will be derivated from this value only
-    @param _creationCode Creation code (constructor) of the contract to be deployed, this value doesn't affect the resulting address
+    @param _creationCode Creation code (constructor) of the contract to be deployed + constructor args \
+    @dev this value doesn't affect the resulting address, only the hash does.
     @param _value In WEI of ETH to be forwarded to child contract
     @return addr of the deployed contract, reverts on error
   */
