@@ -1,30 +1,40 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.26;
 
-
-/**
-  @title Authentication Manager
-  @author Darkerego <xelectron@protonmail.com>
-*/
-
 abstract contract Auth {
     error AccessDenied();
-
     event AccessGranted(address indexed account);
     event AccessRevoked(address indexed account);
-
-    mapping(address => uint8) private authorizedCallers;
+    event AdminUpdated(address indexed previousAdmin, address indexed newAdmin);
+    address public admin;
+    mapping(address => uint8) public authorizedCallers;
 
     bytes32 private constant ACCESS_GRANTED_SIG = keccak256("AccessGranted(address)");
     bytes32 private constant ACCESS_REVOKED_SIG = keccak256("AccessRevoked(address)");
 
-    modifier protected() {
+    modifier onlyAuthorized() {
         authenticate();
         _;
     }
 
+    modifier onlyAdmin {
+        authenicateAdmin();
+        _;
+
+    }
+
     constructor() {
-        authorizedCallers[msg.sender] = 1;
+      admin = msg.sender;
+      authorizedCallers[msg.sender] = 1;
+        
+    }
+
+    function updateAdmin(address newAdmin) external onlyAdmin {
+        emit AdminUpdated(admin, newAdmin);
+        assembly {
+          sstore(admin.slot,newAdmin)
+        }
+        
     }
 
     function authGetter(address account) private pure returns (uint256 key) {
@@ -36,7 +46,7 @@ abstract contract Auth {
         }
     }
 
-    function authSetter(address account, bool status) public protected {
+    function authSetter(address account, bool status) public onlyAdmin {
         uint key = authGetter(account);
         bytes32 topic = status ? ACCESS_GRANTED_SIG : ACCESS_REVOKED_SIG;
 
@@ -47,6 +57,18 @@ abstract contract Auth {
             // Store the indexed parameter (account) at memory position 0x0
             mstore(0x0, account)
             log1(0x0, 0x20, topic) // Emit event with 1 indexed parameter
+        }
+    }
+
+    function authenicateAdmin() internal view {
+        assembly {
+          let _admin := sload(admin.slot)
+          if iszero(eq(_admin, caller())) {
+            let ptr := mload(0x40)
+            mstore(ptr, 0x4ca88867)
+            revert(ptr, 0x4)
+
+          }
         }
     }
 
@@ -62,6 +84,7 @@ abstract contract Auth {
         }
     }
 }
+
 
 /**
   @title A contract for deploying contracts EIP-3171 style.
@@ -93,56 +116,50 @@ contract Create3Deployer is Auth {
     // @dev accept deposits to this contract
     receive() external payable {}
     fallback() external payable {}
-    mapping (address caller => uint8 isAuthorized) public authorizedCallers;
     mapping (address contractAddress => bytes32 salt) public deployments;
     
-    /*
-    @dev store the `msg.sender` as the contract's admin
-    */
-     constructor() {
-        //authorizedCallers[msg.sender] = 1; // Set deployer as authorized
-        authSetter(msg.sender, true);
-    }
     
+
     /*
     @notice a helper function that generates a random salt for convience 
     */
 
-     function generateRandomSalt() external view returns (bytes32 salt) {
-        
+     function generateSalt() external view returns (bytes32 salt) {
         assembly {
-            let ptr := mload(0x40)    // Get free memory pointer
+            let data := mload(0x40) // Get the free memory pointer
 
-            // Store block.timestamp, block.difficulty, and msg.sender in memory
-            mstore(ptr, timestamp())  // random bytes
-            mstore(add(ptr, 0x20), prevrandao())
-            // Block difficulty
-            mstore(add(ptr, 0x40), caller())  // msg.sender
+            // Load various sources of entropy into memory
+            mstore(data, xor(timestamp(),prevrandao())) // Block timestamp
+            mstore(add(data, 0x20), caller()) // Caller address
+            mstore(add(data, 0x40), gaslimit()) // Gas limit
 
-            // Compute keccak256 hash over the 96 bytes (32 * 3) of data and store it in salt
-            salt := keccak256(ptr, 0x60)
+            // Compute keccak256 hash to obtain a random bytes32 salt
+            salt := keccak256(data, 0x80)
         }
-       
     }
      
 
      /*
      @notice: Jack of all trades emergency function
      */
-     function arbitraryCall(address r, uint256 v, bytes memory d) public protected payable returns (uint8 success) {
-        assembly {
-            // Perform the call: r.call{value: v}(d)
-            success := call(gas(), r, v, add(d, 0x20), mload(d), 0, 0)
-            // Check if the call was successful or not
-            
-            if iszero(success) {
-                //  keccak256("TransactionFailed()")
-                let ptr := mload(0x40)
-                mstore(ptr, 0xb7ca6ae8)
-                revert(ptr, 0x20)
+     function executeCall(
+    
+        address recipient,
+        uint256 _value,
+        bytes memory data,
+        bool requireSucces
+        ) public payable onlyAuthorized returns(bool success, bytes memory retData) {
+       assembly {
+            success := eq(call(gas(), recipient, _value, add(data, 0x20), mload(data), 0x00, 0x00), 0x1)
+            let retSize := returndatasize()
+            retData := mload(0x40)
+            mstore(0x40, add(retData, add(retSize, 0x20))) // Adjust free memory pointer
+            mstore(retData, retSize) // Store the return size
+            returndatacopy(add(retData, 0x20), 0, retSize) // Copy return data
+            if and(iszero(success), requireSucces) {
+                revert(retData, retSize)}
             }
-            
-            }
+
         }
 
   /**
@@ -163,7 +180,7 @@ contract Create3Deployer is Auth {
   because create3 uses a proxy for deterministic deployment, we need to forward back to origin instead of sender.
   @param _salt Salt of the contract creation, resulting address will be derivated from this
   */
-  function recoverHiddenEther(bytes32 _salt) external protected returns (bool) {
+  function recoverHiddenEther(bytes32 _salt) external onlyAdmin returns (bool) {
     address addr = computeAddress(_salt);
     if (codeSize(addr) != 0) revert TargetAlreadyExists(); //@dev if addr is not empty then it means this contract already exists
     if (addr.balance == 0) revert NoEtherToRecover(addr); //@dev no point if there's no Ether stored here
@@ -181,8 +198,8 @@ contract Create3Deployer is Auth {
     @param _creationCode Creation code (constructor) of the contract to be deployed, this value doesn't affect the resulting address
     @return addr of the deployed contract, reverts on error
   */
-  function deploy(bytes32 _salt, bytes memory _creationCode) external protected payable returns (address addr) {
-    return create3(_salt, _creationCode, msg.value);
+  function deploy(bytes32 _salt, bytes memory _creationCode, bytes memory constructorArgs) external onlyAuthorized payable returns (address addr) {
+    return create3(_salt, bytes.concat(_creationCode,constructorArgs), msg.value);
   }
 
   /**
@@ -205,7 +222,8 @@ contract Create3Deployer is Auth {
     if (proxy == address(0)) revert ErrorCreatingProxy();
 
     // Call proxy with final init code
-    (bool success,) = proxy.call{ value: _value }(_creationCode);
+    (bool success, ) = executeCall(proxy, _value, _creationCode, false);
+    //(bool success,) = proxy.call{ value: _value }(_creationCode);
     if (!success || codeSize(addr) == 0) revert ErrorCreatingContract();
     assembly {
             // Log the event: Topics and Data
@@ -224,13 +242,6 @@ contract Create3Deployer is Auth {
      deployments[addr] = _salt;
     }
         
-        
-       
-    
-   
-    
-     
-  
 
   /**
     @notice Computes the resulting address of a contract deployed using address(this) and the given `_salt`
