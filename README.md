@@ -14,3 +14,12 @@ as well as deploy contracts using this factory soon.
 
 Additionally, this factory contract contains built in functionality for recovering hidden Ether that is stored at an address that can be generated with a pre-known salt by this contract. 
 Do not loose the salt if you use this feature or your funds will be lost forever. 
+
+#### Python Helper Cli Tool
+
+
+
+Example usage:
+<pre>
+  $ python3 create3.py -n tenderly deploy  contracts/minimalERC20.sol 0 0 MinimalistToken  -ct string string uint256 uint8 -ca Test T 1000000 18
+</pre>
