@@ -78,70 +78,7 @@ abstract contract AsmCalls {
 
 }}}
 
-  /*
- abstract contract AsmCallUtils {
-
-     function staticCall(
-        address target,
-        bytes memory callData,
-        bool requireSuccess
-    ) internal view returns (bool success, bytes memory data) {
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            let size := mload(callData) // Get input data size
-            let ptr := add(callData, 0x20) // Get input data pointer
-            // Allocate memory for return data
-            let output := mload(0x40) // Free memory pointer
-            success := staticcall(
-                gas(),       // Forward all gas
-                target,      // Target contract
-                ptr,         // Input data pointer
-                size,        // Input data size
-                output,      // Output data pointer
-                0x00         // Initially, no known return size
-            )
-
-            let retSize := returndatasize() // Get return data size
-            // Update memory pointer after copying return data
-            data := mload(0x40)
-            mstore(0x40, add(data, add(retSize, 0x20))) // Adjust free memory pointer
-            mstore(data, retSize) // Store the return size
-            returndatacopy(add(data, 0x20), 0, retSize) // Copy return data
-            
-        }
-        checkCall(revertOnFail, success, data);
-        }
-
-     function executeCall(
-    
-        address recipient,
-        uint256 _value,
-        bytes memory data,
-        bool requireSucces
-        ) internal returns(bool success, bytes memory retData) {
-       assembly {
-            success := eq(call(gas(), recipient, _value, add(data, 0x20), mload(data), 0x00, 0x00), 0x1)
-            let retSize := returndatasize()
-            retData := mload(0x40)
-            mstore(0x40, add(retData, add(retSize, 0x20))) // Adjust free memory pointer
-            mstore(retData, retSize) // Store the return size
-            returndatacopy(add(retData, 0x20), 0, retSize) // Copy return data
-            
-
-        }
-        checkCall(revertOnFail, success, data);
-        }
-
-        function checkCall(bool revertOnFail, bool success, bytes memory data) internal pure {
-        assembly {
-          if and(iszero(success), revertOnFail) {
-                revert(data, mload(data))}
-            }
-        }}
-
-
-  */
-     
+ 
 // File: src/utils/Create3.sol
 
 
